@@ -1,0 +1,15 @@
+Debug/
+
+.settings/
+*.bak
+*.log
+*.tmp
+*.lau
+
+.clangd
+.api_xml
+.secure_azone
+.secure_rzone
+.secure_xml
+
+*~
