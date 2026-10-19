@@ -5,6 +5,8 @@
 #include "light_adc.h"
 #include "oled.h"
 #include "dht11.h"
+#include "pwm_light.h"
+#include "key.h"
 
 #include <stdbool.h>
 #include <stdio.h>
@@ -42,9 +44,17 @@ void hal_entry(void)
         uint16_t light_average = 0U;
 
         uint32_t last_oled_time = 0U;
+        bool auto_mode = false;
         dht11_data_t dht_data = {0U, 0U};
 
         bool dht_valid = false;
+
+        uint32_t last_pwm_test_time = 0U;
+        uint8_t test_pwm_percent = 0U;
+
+        key_event_t key_event;
+        uint32_t last_key_time = 0U;
+        uint8_t pwm_percent = 0U;
 
         /*
          * 初始化 LED 模块。
@@ -137,17 +147,28 @@ void hal_entry(void)
             }
         }
 
-        printf("OLED init OK\r\n");
-
-        error = oled_show_startup();
+        /*
+         * 只在启动时清屏一次。
+         */
+        error = oled_clear();
 
         if (error != FSP_SUCCESS)
         {
             printf(
-                "OLED display failed: %ld\r\n",
+                "OLED clear failed: %ld\r\n",
                 (long) error
             );
         }
+
+        //error = oled_show_startup();
+
+        //if (error != FSP_SUCCESS)
+       // {
+        //    printf(
+           //     "OLED display failed: %ld\r\n",
+           //     (long) error
+         //   );
+       // }
 
         /*
          * 初始化温湿度传感器
@@ -196,6 +217,34 @@ void hal_entry(void)
         }
 
         printf("Light ADC init OK\r\n");
+        /*
+         * 初始化PWM
+         */
+        error = pwm_light_init();
+
+        if (error != FSP_SUCCESS)
+        {
+            printf(
+                "PWM init failed: %ld\r\n",
+                (long) error
+            );
+
+            while (true)
+            {
+                led_toggle();
+
+                R_BSP_SoftwareDelay(
+                    200U,
+                    BSP_DELAY_UNITS_MILLISECONDS
+                );
+            }
+        }
+
+        printf("PWM init OK\r\n");
+
+        key_init();
+
+        printf("KEY module OK\r\n");
 
         /*
          * 主循环。
@@ -203,6 +252,77 @@ void hal_entry(void)
         while (true)
         {
             uint32_t now = timer_1ms_get();
+
+            /*
+                * 每 10 ms 扫描按键。
+                */
+               if ((uint32_t)(now - last_key_time) >= 10U)
+               {
+                   last_key_time = now;
+
+                   key_event = key_scan_10ms();
+
+                   if (key_event == KEY_EVENT_INCREASE)
+                   {
+                       if (!auto_mode)
+                       {
+                           if (pwm_percent < 100U)
+                           {
+                               pwm_percent += 5U;
+                           }
+
+                           pwm_light_set_percent(
+                               pwm_percent
+                           );
+                       }
+                   }
+                   else if (key_event == KEY_EVENT_DECREASE)
+                   {
+                       if (!auto_mode)
+                       {
+                           if (pwm_percent >= 5U)
+                           {
+                               pwm_percent -= 5U;
+                           }
+                           else
+                           {
+                               pwm_percent = 0U;
+                           }
+
+                           pwm_light_set_percent(
+                               pwm_percent
+                           );
+                       }
+                   }
+                   else if (key_event == KEY_EVENT_MODE)
+                   {
+                       auto_mode = !auto_mode;
+                   }
+               }
+
+               /*
+                * 每 100 ms 读取光照。
+                */
+               if ((uint32_t)(now - last_light_time) >= 100U)
+               {
+                   last_light_time = now;
+
+                   light_average = light_adc_read_average();
+               }
+
+               /*
+                * 每 200 ms 更新 OLED。
+                */
+               if ((uint32_t)(now - last_oled_time) >= 200U)
+               {
+                   last_oled_time = now;
+
+                   oled_show_control(
+                       light_average,
+                       pwm_percent,
+                       auto_mode
+                   );
+               }
 
             if ((uint32_t)(now - last_led_time) >= 500U)
             {
@@ -230,6 +350,8 @@ void hal_entry(void)
 
                 if (error == FSP_SUCCESS)
                 {
+                    dht_valid = true;
+
                     printf(
                         "Temperature = %u C, Humidity = %u %%\r\n",
                         dht11_data.temperature,
@@ -259,7 +381,12 @@ void hal_entry(void)
             {
                 last_oled_time = now;
 
-                error = oled_show_light_adc(light_average);
+                error = oled_show_environment(
+                    dht_valid,
+                    dht11_data.temperature,
+                    dht11_data.humidity,
+                    light_average
+                );
 
                 if (error != FSP_SUCCESS)
                 {
@@ -269,6 +396,37 @@ void hal_entry(void)
                     );
                 }
             }
+            if ((uint32_t)(now - last_pwm_test_time) >= 2000U)
+            {
+                last_pwm_test_time = now;
+
+                error = pwm_light_set_percent(
+                    test_pwm_percent
+                );
+
+                if (error == FSP_SUCCESS)
+                {
+                    printf(
+                        "PWM duty = %u%%\r\n",
+                        (unsigned int) test_pwm_percent
+                    );
+                }
+                else
+                {
+                    printf(
+                        "PWM set failed: %ld\r\n",
+                        (long) error
+                    );
+                }
+
+                test_pwm_percent += 25U;
+
+                if (test_pwm_percent > 100U)
+                {
+                    test_pwm_percent = 0U;
+                }
+            }
+
         }
 
 

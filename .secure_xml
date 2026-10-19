@@ -52,10 +52,18 @@
     <pincfg active="true" name="" symbol="">
       <configSetting altId="debug0.swclk.p300" configurationId="debug0.swclk" isUsedByDriver="true" peripheral="DEBUG0"/>
       <configSetting altId="debug0.swdio.p108" configurationId="debug0.swdio" isUsedByDriver="true" peripheral="DEBUG0"/>
+      <configSetting altId="gpt2.gtioca.p103" configurationId="gpt2.gtioca" isUsedByDriver="true" peripheral="GPT2"/>
       <configSetting altId="iic0.scl.p408" configurationId="iic0.scl" isUsedByDriver="true" peripheral="IIC0"/>
       <configSetting altId="iic0.sda.p407" configurationId="iic0.sda" isUsedByDriver="true" peripheral="IIC0"/>
+      <configSetting altId="p000.input" configurationId="p000"/>
+      <configSetting altId="p000.gpio_mode.gpio_mode_in" configurationId="p000.gpio_mode"/>
+      <configSetting altId="p000.gpio_pupd.gpio_pupd_ip_up" configurationId="p000.gpio_pupd"/>
+      <configSetting altId="p001.input" configurationId="p001"/>
+      <configSetting altId="p001.gpio_mode.gpio_mode_in" configurationId="p001.gpio_mode"/>
+      <configSetting altId="p001.gpio_pupd.gpio_pupd_ip_up" configurationId="p001.gpio_pupd"/>
       <configSetting altId="p002.output.high" configurationId="p002"/>
       <configSetting altId="p002.gpio_mode.gpio_mode_out.high" configurationId="p002.gpio_mode"/>
+      <configSetting altId="p103.gpio_mode.gpio_mode_peripheral" configurationId="p103.gpio_mode"/>
       <configSetting altId="p104.input" configurationId="p104"/>
       <configSetting altId="p104.gpio_mode.gpio_mode_in" configurationId="p104.gpio_mode"/>
       <configSetting altId="p108.gpio_mode.gpio_mode_peripheral" configurationId="p108.gpio_mode"/>
@@ -64,6 +72,9 @@
       <configSetting altId="p111.output.low" configurationId="p111"/>
       <configSetting altId="p111.gpio_mode.gpio_mode_out.low" configurationId="p111.gpio_mode"/>
       <configSetting altId="p300.gpio_mode.gpio_mode_peripheral" configurationId="p300.gpio_mode"/>
+      <configSetting altId="p402.input" configurationId="p402"/>
+      <configSetting altId="p402.gpio_mode.gpio_mode_in" configurationId="p402.gpio_mode"/>
+      <configSetting altId="p402.gpio_pupd.gpio_pupd_ip_up" configurationId="p402.gpio_pupd"/>
       <configSetting altId="p407.gpio_speed.gpio_speed_medium" configurationId="p407.gpio_drivecapacity"/>
       <configSetting altId="p407.gpio_mode.gpio_mode_peripheral" configurationId="p407.gpio_mode"/>
       <configSetting altId="p408.gpio_speed.gpio_speed_medium" configurationId="p408.gpio_drivecapacity"/>

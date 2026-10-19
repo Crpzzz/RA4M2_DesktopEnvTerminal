@@ -28,5 +28,11 @@ fsp_err_t oled_show_environment(
     uint16_t light_adc
 );
 
+fsp_err_t oled_show_control(
+    uint16_t light_adc,
+    uint8_t pwm_percent,
+    bool auto_mode
+);
+
 #endif
 /* OLED_H_ */

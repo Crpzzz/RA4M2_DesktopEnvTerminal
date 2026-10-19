@@ -10,7 +10,7 @@
 #include <stddef.h>
 
 /*
- * 你的工程之前使用的是 st_ioport_ctrl。
+ * 工程之前使用的是 st_ioport_ctrl。
  * 如果 LED.c 中实际使用的是 g_ioport_ctrl，
  * 就把下面这一行改成 g_ioport_ctrl。
  */

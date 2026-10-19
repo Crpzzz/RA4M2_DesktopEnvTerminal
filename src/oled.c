@@ -452,6 +452,84 @@ static fsp_err_t oled_show_line(
         text
     );
 }
+fsp_err_t oled_show_control(
+    uint16_t light_adc,
+    uint8_t pwm_percent,
+    bool auto_mode
+)
+{
+    char line[22];
+    fsp_err_t error;
+
+    /*
+     * 第 0 行：项目名称。
+     */
+    error = oled_show_line(
+        0U,
+        "SMART DESK"
+    );
+
+    if (error != FSP_SUCCESS)
+    {
+        return error;
+    }
+
+    /*
+     * 第 2 行：光照 ADC 值。
+     */
+    (void) snprintf(
+        line,
+        sizeof(line),
+        "LIGHT: %u",
+        (unsigned int) light_adc
+    );
+
+    error = oled_show_line(
+        2U,
+        line
+    );
+
+    if (error != FSP_SUCCESS)
+    {
+        return error;
+    }
+
+    /*
+     * 第 4 行：PWM 占空比。
+     */
+    (void) snprintf(
+        line,
+        sizeof(line),
+        "PWM: %u %%",
+        (unsigned int) pwm_percent
+    );
+
+    error = oled_show_line(
+        4U,
+        line
+    );
+
+    if (error != FSP_SUCCESS)
+    {
+        return error;
+    }
+
+    /*
+     * 第 6 行：工作模式。
+     */
+    if (auto_mode)
+    {
+        return oled_show_line(
+            6U,
+            "MODE: AUTO"
+        );
+    }
+
+    return oled_show_line(
+        6U,
+        "MODE: MANUAL"
+    );
+}
 
 /*
  * 更新桌面环境信息。
@@ -466,15 +544,23 @@ fsp_err_t oled_show_environment(
     char line[22];
     fsp_err_t error;
 
+    /*
+     * 第 0 行：项目名称
+     */
     error = oled_show_line(
         0U,
         "SMART DESK"
     );
+
     if (error != FSP_SUCCESS)
     {
         return error;
     }
 
+    /*
+     * 第 2 行：温度。
+     * 传感器没到时显示占位符。
+     */
     if (dht_valid)
     {
         (void) snprintf(
@@ -493,12 +579,19 @@ fsp_err_t oled_show_environment(
         );
     }
 
-    error = oled_show_line(2U, line);
+    error = oled_show_line(
+        2U,
+        line
+    );
+
     if (error != FSP_SUCCESS)
     {
         return error;
     }
 
+    /*
+     * 第 4 行：湿度。
+     */
     if (dht_valid)
     {
         (void) snprintf(
@@ -517,12 +610,19 @@ fsp_err_t oled_show_environment(
         );
     }
 
-    error = oled_show_line(4U, line);
+    error = oled_show_line(
+        4U,
+        line
+    );
+
     if (error != FSP_SUCCESS)
     {
         return error;
     }
 
+    /*
+     * 第 6 行：光照 ADC 数值。
+     */
     (void) snprintf(
         line,
         sizeof(line),
@@ -530,7 +630,10 @@ fsp_err_t oled_show_environment(
         (unsigned int) light_adc
     );
 
-    return oled_show_line(6U, line);
+    return oled_show_line(
+        6U,
+        line
+    );
 }
 
 fsp_err_t oled_show_startup(void)
