@@ -317,7 +317,9 @@ fsp_err_t dht11_read(
         return FSP_ERR_INVALID_DATA;
     }
 
-    // DHT11 通常输出整数温度和整数湿度。
+    /*
+     * DHT11 通常输出整数温度和整数湿度。
+     */
     data->humidity = raw_data[0];
     data->temperature = raw_data[2];
 
