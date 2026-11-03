@@ -109,6 +109,14 @@ bool oled_font_get(
             glyph[4] = 0x7FU;
             break;
 
+        case 'N':
+            glyph[0] = 0x7FU;
+            glyph[1] = 0x04U;
+            glyph[2] = 0x08U;
+            glyph[3] = 0x10U;
+            glyph[4] = 0x7FU;
+            break;
+
         case 'O':
             glyph[0] = 0x3EU;
             glyph[1] = 0x41U;

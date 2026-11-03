@@ -88,7 +88,7 @@ fsp_err_t pwm_light_set_percent(
      * 根据百分比换算成 GPT 计数值。
      *
      * 0%   -> 0
-     * 50%  -> 周期计数的一半
+     * 50%  -> 周期计数的一半/
      * 100% -> 整个周期计数
      */
     duty_counts =

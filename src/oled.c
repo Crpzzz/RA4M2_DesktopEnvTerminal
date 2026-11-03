@@ -675,3 +675,143 @@ fsp_err_t oled_show_startup(void)
         "GPT OK"
     );
 }
+fsp_err_t oled_show_control_percent(
+    uint8_t light_percent,
+    uint8_t target_percent,
+    uint8_t pwm_percent,
+    bool auto_mode
+)
+{
+    char line[22];
+    fsp_err_t error;
+
+    error = oled_show_line(
+        0U,
+        "SMART DESK"
+    );
+
+    if (error != FSP_SUCCESS)
+    {
+        return error;
+    }
+
+    (void) snprintf(
+        line,
+        sizeof(line),
+        "LIGHT: %u %%",
+        (unsigned int) light_percent
+    );
+
+    error = oled_show_line(2U, line);
+
+    if (error != FSP_SUCCESS)
+    {
+        return error;
+    }
+
+    (void) snprintf(
+        line,
+        sizeof(line),
+        "TARGET: %u %%",
+        (unsigned int) target_percent
+    );
+
+    error = oled_show_line(4U, line);
+
+    if (error != FSP_SUCCESS)
+    {
+        return error;
+    }
+
+    (void) snprintf(
+        line,
+        sizeof(line),
+        "PWM: %u %%",
+        (unsigned int) pwm_percent
+    );
+
+    error = oled_show_line(6U, line);
+
+    if (error != FSP_SUCCESS)
+    {
+        return error;
+    }
+
+    /*
+     * 当前页面显示四行，
+     * 模式暂时通过串口输出。
+     */
+    (void) auto_mode;
+
+    return FSP_SUCCESS;
+}
+
+fsp_err_t oled_show_status_percent(
+    uint8_t light_percent,
+    uint8_t target_percent,
+    uint8_t pwm_percent,
+    bool auto_mode,
+    bool dht_valid,
+    uint8_t temperature,
+    uint8_t humidity
+)
+{
+    char line[22];
+    fsp_err_t error;
+
+    /* 第 0 行显示当前工作模式。 */
+    (void) snprintf(
+        line,
+        sizeof(line),
+        "MODE:%s",
+        auto_mode ? "AUTO" : "MANUAL"
+    );
+
+    error = oled_show_line(0U, line);
+    if (error != FSP_SUCCESS) return error;
+
+    /* 第 2 行显示当前环境光照百分比。 */
+    (void) snprintf(
+        line,
+        sizeof(line),
+        "LIGHT:%u%%",
+        (unsigned int) light_percent
+    );
+
+    error = oled_show_line(2U, line);
+    if (error != FSP_SUCCESS) return error;
+
+    /* 第 4 行显示温度和湿度。 */
+    if (dht_valid)
+    {
+        (void) snprintf(
+            line,
+            sizeof(line),
+            "TEMP:%uC H:%u%%",
+            (unsigned int) temperature,
+            (unsigned int) humidity
+        );
+    }
+    else
+    {
+        (void) snprintf(
+            line,
+            sizeof(line),
+            "TEMP:--C H:--%%"
+        );
+    }
+
+    error = oled_show_line(4U, line);
+    if (error != FSP_SUCCESS) return error;
+
+    /* 第 6 行显示 PWM 输出和目标亮度。 */
+    (void) snprintf(
+        line,
+        sizeof(line),
+        "PWM:%u%% SET:%u%%",
+        (unsigned int) pwm_percent,
+        (unsigned int) target_percent
+    );
+
+    return oled_show_line(6U, line);
+}

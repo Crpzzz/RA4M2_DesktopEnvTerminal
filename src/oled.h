@@ -11,7 +11,6 @@
 #include "hal_data.h"
 #include <stdint.h>
 #include <stdbool.h>
-#include <stdint.h>
 
 fsp_err_t oled_init(void);
 
@@ -34,5 +33,23 @@ fsp_err_t oled_show_control(
     bool auto_mode
 );
 
+fsp_err_t oled_show_control_percent(
+    uint8_t light_percent,
+    uint8_t target_percent,
+    uint8_t pwm_percent,
+    bool auto_mode
+);
+/* 显示光照、目标值、温湿度、PWM 和当前模式。 */
+fsp_err_t oled_show_status_percent(
+    uint8_t light_percent,
+    uint8_t target_percent,
+    uint8_t pwm_percent,
+    bool auto_mode,
+    bool dht_valid,
+    uint8_t temperature,
+    uint8_t humidity
+);
+
 #endif
 /* OLED_H_ */
+

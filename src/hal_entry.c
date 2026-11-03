@@ -1,25 +1,49 @@
+/*
+ * 智能桌面环境控制终端：入口与任务调度。
+ * 本文件调用各模块；GPIO、串口、ADC 等底层实现仍在各模块的 .c 文件中。
+ * 合并到原工程时，保留原 hal_entry.c 中其他 FSP 模板代码。
+ */
+/* 引入模块接口：头文件告诉编译器有哪些函数和类型可以使用。 */
 #include "hal_data.h"
-#include "led.h"
+#include "LED.h"
 #include "uart_debug.h"
 #include "timer_1ms.h"
-#include "light_adc.h"
 #include "oled.h"
 #include "dht11.h"
+#include "light_adc.h"
 #include "pwm_light.h"
 #include "key.h"
+#include "light_level.h"
+#include "pid_light.h"
 
-#include <stdbool.h>
-#include <stdio.h>
-#include <stdint.h>
+#include <stdbool.h>  /* bool、true、false：表示开关状态。 */
+#include <stdint.h>   /* uint8_t、uint16_t、uint32_t：明确整数的位数。 */
+#include <stdio.h>    /* printf 和 setvbuf：串口打印与输出缓冲设置。 */
 
+/* 0：不编译 DHT11 相关任务；传感器到货并接线后改成 1。 */
+#define APP_DHT11_ENABLED (1)
 
-#if (1 == BSP_MULTICORE_PROJECT) && BSP_TZ_SECURE_BUILD
-bsp_ipc_semaphore_handle_t g_core_start_semaphore =
+/*
+ * 统一处理模块初始化结果，避免每个模块都重复写一段错误判断。
+ * name 是用于串口显示的模块名，error 是该模块初始化函数的返回值。
+ * static 表示此函数只供本文件使用；调用前必须先初始化 LED 和 UART。
+ */
+static void app_check_init(const char *name, fsp_err_t error)
 {
-    .semaphore_num = 0
-};
-#endif
+    if (error == FSP_SUCCESS)
+    {
+        printf("%s init OK\r\n", name);
+        return;  /* 成功则返回调用处，继续初始化下一个模块。 */
+    }
 
+    printf("%s init failed: %ld\r\n", name, (long) error);
+    /* 初始化失败时停机闪灯；这个延时只用于故障提示，不是正常任务调度。 */
+    while (true)
+    {
+        led_toggle();
+        R_BSP_SoftwareDelay(200U, BSP_DELAY_UNITS_MILLISECONDS);
+    }
+}
 
 
 /*******************************************************************************************************************//**
@@ -32,402 +56,403 @@ void hal_entry(void)
 
     /* Wake up 2nd core if this is first core and we are inside a multicore project. */
 
-        fsp_err_t error;
 
-        uint32_t last_led_time = 0U;
-        uint32_t last_print_time = 0U;
+        /* error 接收模块函数的返回值；FSP_SUCCESS 表示本次调用成功。 */
+        fsp_err_t error = FSP_SUCCESS;
 
-        dht11_data_t dht11_data;
-        uint32_t last_dht11_time = 0U;
+        /* 保存任务上次执行的时间，单位毫秒；0U 的 U 表示无符号整数。 */
+           uint32_t last_led_time = 0U;    /* LED：500 ms。 */
+           uint32_t last_print_time = 0U;  /* 状态打印：1000 ms。 */
+           uint32_t last_light_time = 0U;  /* 光照采样：100 ms。 */
+           uint32_t last_oled_time = 0U;   /* OLED 刷新：200 ms。 */
+           uint32_t last_key_time = 0U;    /* 按键扫描：10 ms。 */
+           uint32_t last_key_debug_time = 0U;
+           uint32_t last_dht11_time = 0U;
 
-        uint32_t last_light_time = 0U;
-        uint16_t light_average = 0U;
+           uint16_t light_average = 0U;    /* ADC 平均读数，当前为 12 位，范围 0~4095。 */
+           uint8_t light_percent = 0U;     /* 映射后的相对光照 0~100，不是 lux。 */
+           uint8_t pwm_percent = 0U;       /* 最近一次成功设置的 PWM 占空比。 */
+           uint8_t target_percent = 60U;   /* 目标光照，后面从 light_level 模块同步。 */
+           bool auto_mode = false;        /* false 手动模式；true 自动模式框架。 */
+           pid_light_t light_pid = {0};    /* PI 控制器状态，独立于 GPIO 和 PWM 驱动。 */
+           bool light_valid = false;      /* 只有 ADC 最近一次采样成功，才允许自动控制。 */
+           bool dht11_valid = false;
+           float filtered_adc = 0.0f;     /* 有效采样的平滑值。 */
+           dht11_data_t dht11_data = {0};
 
-        uint32_t last_oled_time = 0U;
-        bool auto_mode = false;
-        dht11_data_t dht_data = {0U, 0U};
 
-        bool dht_valid = false;
 
-        uint32_t last_pwm_test_time = 0U;
-        uint8_t test_pwm_percent = 0U;
-
-        key_event_t key_event;
-        uint32_t last_key_time = 0U;
-        uint8_t pwm_percent = 0U;
-
-        /*
-         * 初始化 LED 模块。
-         */
+        /* 先保留已经验证成功的 LED 初始化，随后打开调试串口。 */
         led_init();
-
-        /*
-         * 初始化 UART9。
-         */
         error = uart_debug_init();
-
         if (error != FSP_SUCCESS)
         {
-            /*
-             * UART 初始化失败时，让 LED 快速闪烁。
-             * 这样即使串口不能输出，也能通过 LED 判断错误。
-             */
+            /* 串口自己初始化失败时不能依靠 printf 报错，所以只用 LED 快闪。 */
             while (true)
             {
                 led_toggle();
-
-                R_BSP_SoftwareDelay(
-                    100U,
-                    BSP_DELAY_UNITS_MILLISECONDS
-                );
+                R_BSP_SoftwareDelay(100U, BSP_DELAY_UNITS_MILLISECONDS);
             }
         }
 
-        /*
-         * 关闭 printf 缓冲，使数据立即发送。
-         */
-        setvbuf(
-            stdout,
-            NULL,
-            _IONBF,
-            0
-        );
+        /* 关闭 printf 缓冲，让串口助手立即看到每条信息。 */
+        (void) setvbuf(stdout, NULL, _IONBF, 0);
+        printf("\r\nUART9 init OK\r\n");
 
-        printf(
-            "\r\n"
-            "UART9 init OK\r\n"
-        );
+        app_check_init("GPT0", timer_1ms_init());
 
-        /*
-         * 初始化 GPT0 1 ms 定时器。
-         */
-        error = timer_1ms_init();
+        /* PWM 初始化后先关闭外接灯，避免上电瞬间满亮。 */
+        app_check_init("PWM", pwm_light_init());
+        app_check_init("PWM zero", pwm_light_set_percent(0U));
+        app_check_init("Light ADC", light_adc_init());
+        app_check_init("OLED", oled_init());
+        app_check_init("OLED clear", oled_clear());
 
-        if (error != FSP_SUCCESS)
-        {
-            /*
-             * GPT 初始化失败时，让 LED 慢速闪烁。
-             */
-            while (true)
-            {
-                led_toggle();
-
-                R_BSP_SoftwareDelay(
-                    500U,
-                    BSP_DELAY_UNITS_MILLISECONDS
-                );
-            }
-        }
-
-        printf(
-            "GPT0 1ms timer init OK\r\n"
-        );
-
-
-        /*
-         * 初始化OLED
-         */
-        error = oled_init();
-
-        if (error != FSP_SUCCESS)
-        {
-            printf(
-                "OLED init failed: %ld\r\n",
-                (long) error
-            );
-
-            while (true)
-            {
-                led_toggle();
-
-                R_BSP_SoftwareDelay(
-                    100U,
-                    BSP_DELAY_UNITS_MILLISECONDS
-                );
-            }
-        }
-
-        /*
-         * 只在启动时清屏一次。
-         */
-        error = oled_clear();
-
-        if (error != FSP_SUCCESS)
-        {
-            printf(
-                "OLED clear failed: %ld\r\n",
-                (long) error
-            );
-        }
-
-        //error = oled_show_startup();
-
-        //if (error != FSP_SUCCESS)
-       // {
-        //    printf(
-           //     "OLED display failed: %ld\r\n",
-           //     (long) error
-         //   );
-       // }
-
-        /*
-         * 初始化温湿度传感器
-         */
-        error = dht11_init();
-
-        if (error != FSP_SUCCESS)
-        {
-            printf(
-                "DHT11 init failed: %ld\r\n",
-                (long) error
-            );
-
-            while (true)
-            {
-                led_toggle();
-
-                R_BSP_SoftwareDelay(
-                    100U,
-                    BSP_DELAY_UNITS_MILLISECONDS
-                );
-            }
-        }
-
-        printf("DHT11 init OK\r\n");
-        /*
-         * 初始化光敏传感器
-         */
-        error = light_adc_init();
-
-        if (error != FSP_SUCCESS)
-        {
-            printf(
-                "Light ADC init failed: %ld\r\n",
-                (long) error
-            );
-
-            while (true)
-            {
-                led_toggle();
-                R_BSP_SoftwareDelay(
-                    200U,
-                    BSP_DELAY_UNITS_MILLISECONDS
-                );
-            }
-        }
-
-        printf("Light ADC init OK\r\n");
-        /*
-         * 初始化PWM
-         */
-        error = pwm_light_init();
-
-        if (error != FSP_SUCCESS)
-        {
-            printf(
-                "PWM init failed: %ld\r\n",
-                (long) error
-            );
-
-            while (true)
-            {
-                led_toggle();
-
-                R_BSP_SoftwareDelay(
-                    200U,
-                    BSP_DELAY_UNITS_MILLISECONDS
-                );
-            }
-        }
-
-        printf("PWM init OK\r\n");
-
+        /* 按键的上拉由 FSP Pins 配置，key 模块只负责扫描和消抖。 */
         key_init();
+        printf("KEY init OK\r\n");
 
-        printf("KEY module OK\r\n");
+        /* 当前先使用 ADC 全量程，后续可替换成实际测得的暗、亮端点。 */
+        light_level_init(4095U, 0U);
+        target_percent = light_level_get_target();
 
-        /*
-         * 主循环。
-         */
+    #if APP_DHT11_ENABLED
+        app_check_init("DHT11 GPIO", dht11_init());
+    #else
+        printf("DHT11 disabled: module not connected\r\n");
+    #endif
+
+        /* 从初始化完成时开始计时，避免把初始化耗时算进第一次任务间隔。 */
+        uint32_t start = timer_1ms_get();
+        last_led_time = start;
+        last_print_time = start;
+        last_light_time = start;
+        last_oled_time = start;
+        last_key_time = start;
+        last_key_debug_time = start;
+        last_dht11_time = start;
+
+    #if APP_DHT11_ENABLED
+        last_dht11_time = start;
+    #endif
+
+        /* 当前还未接入 PID：AUTO 可修改目标，但不会自动改变灯的亮度。 */
+        printf("MANUAL: keys change PWM; AUTO: keys change target.\r\n");
+        printf("PID not connected yet; AUTO holds the current PWM.\r\n");
+
+        /* 主循环一直运行；各任务到时间才执行，不再用长延时控制执行顺序。 */
         while (true)
         {
+            /* 获取本轮时间快照。任务内部的串口、OLED、DHT11 仍可能短暂阻塞。 */
             uint32_t now = timer_1ms_get();
 
+            if ((uint32_t)(now - last_key_debug_time) >= 1000U)
+            {
+                bsp_io_level_t mode_level = BSP_IO_LEVEL_HIGH;
+                bsp_io_level_t increase_level = BSP_IO_LEVEL_HIGH;
+                bsp_io_level_t decrease_level = BSP_IO_LEVEL_HIGH;
+
+                last_key_debug_time = now;
+
+                (void) R_IOPORT_PinRead(
+                    &g_ioport_ctrl,
+                    BSP_IO_PORT_00_PIN_00,
+                    &mode_level
+                );
+
+                (void) R_IOPORT_PinRead(
+                    &g_ioport_ctrl,
+                    BSP_IO_PORT_00_PIN_01,
+                    &increase_level
+                );
+
+                (void) R_IOPORT_PinRead(
+                    &g_ioport_ctrl,
+                    BSP_IO_PORT_04_PIN_02,
+                    &decrease_level
+                );
+
+                printf(
+                    "KEY RAW: P000=%d P001=%d P402=%d\r\n",
+                    (int) mode_level,
+                    (int) increase_level,
+                    (int) decrease_level
+                );
+            }
+
+            /* 无符号时间差写法能处理毫秒计数回绕；这里不是精确实时调度器。 */
+            if ((uint32_t)(now - last_key_time) >= 10U)
+            {
+                /* 更新上次执行时间，防止同一次到期条件被主循环反复执行。 */
+                last_key_time = now;
+                /* 读取消抖后的按下事件：无按键、模式、增加或减少。 */
+                key_event_t event = key_scan_10ms();
+
+                if (event == KEY_EVENT_MODE)
+                {
+                    if (auto_mode)
+                    {
+                        /*
+                         * 退出自动控制，保留当前 PWM。
+                         */
+                        auto_mode = false;
+                    }
+                    else if (light_valid)
+                    {
+                        /*
+                         * 进入自动模式前，使用当前光照和当前 PWM
+                         * 初始化 PI 控制器。
+                         */
+                        pid_light_start(
+                            &light_pid,
+                            (float) target_percent,
+                            (float) light_percent,
+                            (float) pwm_percent
+                        );
+
+                        auto_mode = true;
+                    }
+                     printf(
+                        "MODE: %s\r\n",
+                        auto_mode ? "AUTO" : "MANUAL"
+                    );
+                }
+                else if ((event == KEY_EVENT_INCREASE) ||
+                         (event == KEY_EVENT_DECREASE))
+                {
+                    /* 条件 ? 成立时取值 : 不成立时取值。自动调目标，手动调 PWM。 */
+                    uint8_t value = auto_mode ? target_percent : pwm_percent;
+
+                    if (event == KEY_EVENT_INCREASE)
+                    {
+                        /* 加 5，但最大只到 100；例如 98 加一次仍为 100。 */
+                        value = (value >= 95U) ? 100U : (uint8_t)(value + 5U);
+                    }
+                    else
+                    {
+                        /* 减 5，但最小只到 0，避免无符号整数减成一个很大的数。 */
+                        value = (value <= 5U) ? 0U : (uint8_t)(value - 5U);
+                    }
+
+                    if (auto_mode)
+                    {
+                        /* 修改目标模块中的值，再同步本地用于 OLED 显示的变量。 */
+                        light_level_set_target(value);
+                        target_percent = light_level_get_target();
+                        printf("Target = %u%%\r\n", (unsigned int) target_percent);
+                    }
+                    else
+                    {
+                        /* 先请求硬件设置 PWM；只有成功后才更新显示使用的数值。 */
+                        error = pwm_light_set_percent(value);
+                        if (error == FSP_SUCCESS)
+                        {
+                            pwm_percent = value;
+                            printf("PWM = %u%%\r\n", (unsigned int) pwm_percent);
+                        }
+                        else
+                        {
+                            printf("PWM set failed: %ld\r\n", (long) error);
+                        }
+                    }
+                }
+            }
+
+            /* 光照任务：获取滤波读数，再转换成相对百分比，只保留这一处采样。 */
             /*
-                * 每 10 ms 扫描按键。
-                */
-               if ((uint32_t)(now - last_key_time) >= 10U)
-               {
-                   last_key_time = now;
+             * 每约 100 ms：
+             * 读取 ADC → 平滑 → 转成相对光照 → 自动模式执行 PI。
+             */
+            if ((uint32_t)(now - last_light_time) >= 100U)
+            {
+                /*
+                 * 记录本次控制实际经过的时间。
+                 */
+                uint32_t elapsed_ms =
+                    (uint32_t)(now - last_light_time);
 
-                   key_event = key_scan_10ms();
+                last_light_time = now;
 
-                   if (key_event == KEY_EVENT_INCREASE)
-                   {
-                       if (!auto_mode)
-                       {
-                           if (pwm_percent < 100U)
-                           {
-                               pwm_percent += 5U;
-                           }
+                uint16_t raw = 0U;
 
-                           pwm_light_set_percent(
-                               pwm_percent
-                           );
-                       }
-                   }
-                   else if (key_event == KEY_EVENT_DECREASE)
-                   {
-                       if (!auto_mode)
-                       {
-                           if (pwm_percent >= 5U)
-                           {
-                               pwm_percent -= 5U;
-                           }
-                           else
-                           {
-                               pwm_percent = 0U;
-                           }
+                /*
+                 * 使用单次读取接口，检查是否真的采样成功。
+                 *
+                 * 旧的 light_adc_read_average() 在失败时返回 0，
+                 * 无法区分“环境很暗”和“读取失败”。
+                 */
+                error = light_adc_read(&raw);
 
-                           pwm_light_set_percent(
-                               pwm_percent
-                           );
-                       }
-                   }
-                   else if (key_event == KEY_EVENT_MODE)
-                   {
-                       auto_mode = !auto_mode;
-                   }
-               }
+                if (error == FSP_SUCCESS)
+                {
+                    /*
+                     * 首次采样直接使用，防止从 0 慢慢上升。
+                     */
+                    if (!light_valid)
+                    {
+                        filtered_adc = (float) raw;
+                    }
+                    else
+                    {
+                        /*
+                         * 每次向新值靠近四分之一，减小读数跳动。
+                         */
+                        filtered_adc +=
+                            0.25f * ((float) raw - filtered_adc);
+                    }
 
-               /*
-                * 每 100 ms 读取光照。
-                */
-               if ((uint32_t)(now - last_light_time) >= 100U)
-               {
-                   last_light_time = now;
+                    light_valid = true;
 
-                   light_average = light_adc_read_average();
-               }
+                    /*
+                     * 加 0.5 后转整数，实现正数的四舍五入。
+                     */
+                    light_average =
+                        (uint16_t)(filtered_adc + 0.5f);
 
-               /*
-                * 每 200 ms 更新 OLED。
-                */
-               if ((uint32_t)(now - last_oled_time) >= 200U)
-               {
-                   last_oled_time = now;
+                    light_percent = light_level_convert(
+                        light_average
+                    );
 
-                   oled_show_control(
-                       light_average,
-                       pwm_percent,
-                       auto_mode
-                   );
-               }
+                    if (auto_mode)
+                    {
+                        /*
+                         * 毫秒除以 1000，转换成秒。
+                         */
+                        float output = pid_light_update(
+                            &light_pid,
+                            (float) target_percent,
+                            (float) light_percent,
+                            (float) elapsed_ms / 1000.0f
+                        );
 
+                        uint8_t requested =
+                            (uint8_t)(output + 0.5f);
+
+                        error = pwm_light_set_percent(
+                            requested
+                        );
+
+                        if (error == FSP_SUCCESS)
+                        {
+                            /*
+                             * 硬件设置成功后，再更新显示值。
+                             */
+                            pwm_percent = requested;
+                        }
+                        else
+                        {
+                            auto_mode = false;
+
+                            printf(
+                                "PWM failed; AUTO stopped: %ld\r\n",
+                                (long) error
+                            );
+                        }
+                    }
+                }
+                else
+                {
+                    /*
+                     * ADC 读取失败，不能当作零光照继续加亮。
+                     */
+                    light_valid = false;
+
+                    printf(
+                        "ADC failed: %ld\r\n",
+                        (long) error
+                    );
+
+                    if (auto_mode)
+                    {
+                        /*
+                         * 自动模式下采样失败：
+                         * 退出自动模式，并尝试关闭灯。
+                         */
+                        auto_mode = false;
+
+                        error = pwm_light_set_percent(0U);
+
+                        if (error == FSP_SUCCESS)
+                        {
+                            pwm_percent = 0U;
+                        }
+                        else
+                        {
+                            printf(
+                                "PWM off failed: %ld\r\n",
+                                (long) error
+                            );
+                        }
+                    }
+                }
+            }
+
+            /* OLED 只更新控制页面，不能再同时调用旧启动页或温湿度页。 */
+            if ((uint32_t)(now - last_oled_time) >= 200U)
+            {
+                last_oled_time = now;
+                error = oled_show_status_percent(
+                    light_percent,
+                    target_percent,
+                    pwm_percent,
+                    auto_mode,
+                    dht11_valid,
+                    dht11_data.temperature,
+                    dht11_data.humidity
+                );
+
+                if (error != FSP_SUCCESS)
+                {
+                    printf("OLED update failed: %ld\r\n", (long) error);
+                }
+            }
+
+            /* LED 每 500 ms 翻转一次：亮半秒、灭半秒，完整周期约 1 秒。 */
             if ((uint32_t)(now - last_led_time) >= 500U)
             {
                 last_led_time = now;
                 led_toggle();
             }
 
+            /* 串口每秒汇总一次，避免每次 ADC 采样都打印导致刷屏和阻塞。 */
             if ((uint32_t)(now - last_print_time) >= 1000U)
             {
                 last_print_time = now;
-
-                printf(
-                    "system tick = %lu ms\r\n",
-                    (unsigned long) now
-                );
+                /* %lu 对应 unsigned long；%u 对应 unsigned int；%% 打印百分号。 */
+                printf("tick=%lu, ADC=%u, LIGHT=%u%%, SET=%u%%, PWM=%u%%, MODE=%s\r\n",
+                       (unsigned long) now,
+                       (unsigned int) light_average,
+                       (unsigned int) light_percent,
+                       (unsigned int) target_percent,
+                       (unsigned int) pwm_percent,
+                       auto_mode ? "AUTO" : "MANUAL");
             }
 
+    #if APP_DHT11_ENABLED
+            /* 只有宏为 1 时才编译此任务。读失败只报错，不让整个系统停机。 */
             if ((uint32_t)(now - last_dht11_time) >= 2000U)
             {
                 last_dht11_time = now;
-
-                error = dht11_read(
-                    &dht11_data
-                );
-
+                /* & 取得结构体地址，让读取函数把温湿度写入这个结构体。 */
+                error = dht11_read(&dht11_data);
                 if (error == FSP_SUCCESS)
                 {
-                    dht_valid = true;
+                    dht11_valid = true;
 
-                    printf(
-                        "Temperature = %u C, Humidity = %u %%\r\n",
-                        dht11_data.temperature,
-                        dht11_data.humidity
-                    );
+                    printf("TEMP=%u C, HUMI=%u %%\r\n",
+                           (unsigned int) dht11_data.temperature,
+                           (unsigned int) dht11_data.humidity);
                 }
                 else
                 {
-                    printf(
-                        "DHT11 read failed: %ld\r\n",
-                        (long) error
-                    );
+                    dht11_valid = false;
+
+                    printf("DHT11 read failed: %ld\r\n", (long) error);
                 }
             }
-            if ((uint32_t)(now - last_light_time) >= 100U)
-            {
-                last_light_time = now;
-                light_average = light_adc_read_average();
-
-                printf(
-                    "Light ADC average = %u / %u\r\n",
-                    light_average,
-                    (unsigned int) 4095U
-                );
-            }
-            if ((uint32_t)(now - last_oled_time) >= 200U)
-            {
-                last_oled_time = now;
-
-                error = oled_show_environment(
-                    dht_valid,
-                    dht11_data.temperature,
-                    dht11_data.humidity,
-                    light_average
-                );
-
-                if (error != FSP_SUCCESS)
-                {
-                    printf(
-                        "OLED update failed: %ld\r\n",
-                        (long) error
-                    );
-                }
-            }
-            if ((uint32_t)(now - last_pwm_test_time) >= 2000U)
-            {
-                last_pwm_test_time = now;
-
-                error = pwm_light_set_percent(
-                    test_pwm_percent
-                );
-
-                if (error == FSP_SUCCESS)
-                {
-                    printf(
-                        "PWM duty = %u%%\r\n",
-                        (unsigned int) test_pwm_percent
-                    );
-                }
-                else
-                {
-                    printf(
-                        "PWM set failed: %ld\r\n",
-                        (long) error
-                    );
-                }
-
-                test_pwm_percent += 25U;
-
-                if (test_pwm_percent > 100U)
-                {
-                    test_pwm_percent = 0U;
-                }
-            }
-
+    #endif
         }
+
 
 
 
